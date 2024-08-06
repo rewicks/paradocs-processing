@@ -1,0 +1,79 @@
+#!/usr/bin/env python
+
+import argparse
+import sys
+import gzip
+import os
+import xxhash
+import math
+import io
+from pathlib import Path
+import time
+from filelock import FileLock
+
+
+class HashXX32(object):
+    """
+        Class to hash the ngrams. They are seeded sequentially for consistency.
+    """
+    def __init__(self, seed : int, max_hash_value : int):
+        self.h = xxhash.xxh32(seed=seed)
+        self.max_hash_value = max_hash_value
+
+    def hash(self, o : str):
+        """
+            Hashes input string and offsets value based on offset (reserved space in the embedding space)
+        """
+        self.h.reset()
+        self.h.update(o)
+        
+        hash_value = self.h.intdigest() % self.max_hash_value
+        return str(hash_value)
+
+def normalize_url(url):
+    if url.startswith("http"):
+        url = "//".join(url.split('//')[1:])
+    if url.startswith("www."):
+        url = 'www.'.join(url.split('www.')[1:])
+    url = url.lower()
+    return url
+
+
+def main(args):
+    start = time.time()
+    
+    hasher = HashXX32(seed=14, max_hash_value=int(math.pow(10, args.prefix_length)))
+
+    count = 0
+    os.makedirs(args.outdir, exist_ok=True)
+    for line in sys.stdin:
+        url, text = line.split("\t")
+        count += 1
+        if count % 100000 == 0:
+            print(f"{count} \ 50000000 : {time.time()-start}")
+            start = time.time()
+
+
+        url = url.strip()
+        text = text.strip()
+
+        normalized = normalize_url(url)
+        prefix = hasher.hash(normalized).zfill(args.prefix_length)
+        file_path = os.path.join(args.outdir, f"{prefix[0]}{prefix[1]}/{prefix[2]}{prefix[3]}")
+
+        os.makedirs(file_path, exist_ok=True)
+
+        outpath = os.path.join(file_path, f"{prefix[4:]}.gz")
+        with gzip.open(outpath, 'a+') as outfile:
+            outfile.write(bytes(f"{normalized}\t{text}\n", "utf-8"))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--outdir', type=str)
+    parser.add_argument('--prefix_length', type=int, default=7)
+    parser.add_argument('--postfix')
+
+    args = parser.parse_args()
+
+    main(args)

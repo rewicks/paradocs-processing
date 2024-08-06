@@ -1,0 +1,25 @@
+#! /home/hltcoe/rwicks/.conda/envs/langid/bin/python3.9
+
+import fasttext
+import sys
+import json
+
+complete = False
+lang = sys.argv[1]
+
+MODEL_PATH="/home/hltcoe/rwicks/bin/nllb.lid.model"
+model = fasttext.load_model(MODEL_PATH)
+
+for line in sys.stdin:
+    try:
+        output = model.predict(line.strip(), 204)
+        json_out = {}
+        printed = False
+        for l, prob in zip(output[0], output[1]):
+            if not printed and l == lang:
+                printed = True
+                print(prob)
+        if not printed:
+            print('0.0')
+    except:
+        print('0.0') 

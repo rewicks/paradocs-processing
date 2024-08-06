@@ -1,0 +1,266 @@
+#!/usr/bin/env python
+
+import argparse
+import sys
+import os
+import gzip
+import base64
+import xxhash
+import hashlib
+import re
+import math
+
+from sentence_splitter import SentenceSplitter, split_text_into_sentences
+
+class HashXX32(object):
+    """
+        Class to hash the ngrams. They are seeded sequentially for consistency.
+    """
+    def __init__(self, seed : int, max_hash_value : int):
+        self.h = xxhash.xxh32(seed=seed)
+        self.max_hash_value = max_hash_value
+
+    def hash(self, o : str):
+        """
+            Hashes input string and offsets value based on offset (reserved space in the embedding space)
+        """
+        self.h.reset()
+        self.h.update(o)
+        
+        hash_value = self.h.intdigest() % self.max_hash_value
+        return str(hash_value)
+
+def get_prefix(url, length=4):
+    prefix = []
+    disallowed = "~`!@#$%^&*()-_=+{[}]|\\;:'\",<.>?/"
+    for t in url:
+        if t not in disallowed:
+            prefix.append(t)
+    prefix = prefix[:length]
+    while len(prefix) != length:
+        prefix.append("a")
+    return prefix
+
+def normalize_url(url):
+    if url.startswith("http"):
+        url = "//".join(url.split('//')[1:])
+    if url.startswith("www."):
+        url = 'www.'.join(url.split('www.')[1:])
+    url = url.lower()
+    return url
+
+def simplify_whitespace(doc):
+    doc = doc.replace('\xa0', ' ')
+    doc = doc.replace('\u3000', ' ')
+
+    doc = doc.replace('\u2028', '\n')
+    doc = re.sub(r'\s*\n\s*', '\n', doc)
+    doc = re.sub(r' +', ' ', doc)
+    doc = re.sub(r'\n+', '\n', doc)
+
+    return doc.strip()
+
+def get_next_doc(args, istream):
+    doc_id = ""
+    doc = []
+    for line in istream:
+        fields = line.split(args.delimiter)
+        url = fields[args.urlfield]
+        if url != doc_id and len(doc) > 0:
+            yield doc_id.split(), doc
+            doc = []
+        doc.append({
+                    "text": fields[args.textfield],
+                    "line": line
+                })
+        doc_id = url
+    yield doc_id.split(), doc
+    yield None, None
+
+
+def find_monolingual_document(doc_id, mono_dirs, hasher, prefix_length):
+    for did in doc_id:
+
+        normalized = normalize_url(did)
+        prefix = get_prefix(hasher.hash(normalized), length=prefix_length)
+        for mono in mono_dirs:
+            mono_path = os.path.join(mono, f"{prefix[0]}{prefix[1]}/{prefix[2]}{prefix[3]}/{''.join(prefix[4:])}.gz")
+            if os.path.exists(mono_path):
+                with gzip.open(mono_path) as mono:
+                    mono_lines = mono.readlines()
+                    for line in mono_lines:
+                        line = line.decode('utf-8').split('\t')
+                        url = line[0]
+                        text = line[1]
+                        if url == normalized:
+                            try:
+                                decoded = base64.standard_b64decode(text).decode('utf-8')
+                                decoded = simplify_whitespace(decoded)
+                            except:
+                                print(f"Could not load a document at {url}", file=sys.stderr)
+                                continue
+                            document = []
+                            paragraph = 0
+                            sentence = 0
+                            start_token = 0
+                            for i, d in enumerate(decoded.split('\n')):
+                                sentences = splitter.split(text=d)
+                                for j, sent in enumerate(sentences):
+                                    document.append(
+                                        {
+                                            "text": sent,
+                                            "paragraph_id": paragraph,
+                                            "sentence_id": sentence,
+                                            "start_token": start_token,
+                                            "end_token": start_token + len(sent) - 1
+                                        }
+                                    )
+                                    sentence += 1
+                                    start_token += len(sent)
+                                    if j != len(sentences) - 1:
+                                        start_token += 1
+                                start_token += 1
+                                paragraph += 1
+                            return document, text
+    return None, None
+
+def sentence_equals(sample, candidate):
+    start_index = sample.find(candidate)
+    if start_index != -1:
+        return True, start_index
+    return False, -1
+
+def is_in_document(document, sentence, offset=0):
+    sentence = simplify_whitespace(sentence)
+    doc_string = " ".join(d['text'] for d in document)
+    start_index = doc_string.find(sentence)
+    if start_index == - 1:
+        return False, -1, document, 0
+    start_index += offset
+    end_index = start_index + len(sentence) - 1
+    metadata = {
+        "text": [],
+        "paragraph_id": set(),
+        "sentence_id": set(),
+        "start_token": start_index,
+        "end_token": end_index
+    }
+    for i, d in enumerate(document):
+        if start_index <= d['end_token']:
+            metadata["text"].append(d["text"])
+            metadata["paragraph_id"].add(d["paragraph_id"])
+            metadata["sentence_id"].add(d["sentence_id"])
+        if end_index <= d['end_token']:
+            # breakpoint()
+            if end_index < d['end_token']:
+                offset = d['start_token']
+                id = i
+            else:
+                offset = d['end_token'] + 2
+                id = i+1
+            break
+    metadata["text"] = " ".join(metadata["text"])
+    if len(metadata["paragraph_id"]) == 0:
+        return False, -1, document, 0
+    if len(metadata['paragraph_id']) == 1:
+        metadata["paragraph_id"] = list(metadata['paragraph_id'])[0]
+    else:
+        metadata["paragraph_id"] = f"{min(metadata['paragraph_id'])}-{max(metadata['paragraph_id'])}"
+
+    if len(metadata['sentence_id']) == 1:
+        metadata["sentence_id"] = list(metadata['sentence_id'])[0]
+    else:
+        metadata["sentence_id"] = f"{min(metadata['sentence_id'])}-{max(metadata['sentence_id'])}"
+
+    return True, metadata, document[id:], offset
+
+
+def align_document(document, original):
+    metadata = []
+    last_offset = 0
+    for i, d in enumerate(document):
+        found, md, original, offset = is_in_document(original, d['text'], offset=last_offset)
+        if found:
+            last_offset = offset
+        if found:
+            metadata.append(md)
+        else:
+            metadata.append({
+                "text": None,
+                "paragraph_id": None,
+                "sentence_id": None,
+                "start_token": None,
+                "end_token": None
+            })
+    return metadata
+
+
+
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input', default=None, type=str)
+    parser.add_argument('--lang', type=str, default='de')
+    parser.add_argument('--mono_shard_dir')
+    parser.add_argument('--delimiter', type=str, default="\t")
+    parser.add_argument('--urlfield', type=int, default=0)
+    parser.add_argument('--textfield', type=int, default=1)
+    parser.add_argument('--prefix_length', type=int, default=7)
+    parser.add_argument('--doc_out', type=str)
+
+    args = parser.parse_args()
+
+    if args.input is None:
+        istream = sys.stdin
+    else:
+        istream = gzip.open(args.input, 'rt')
+
+    doc_out = gzip.open(args.doc_out, 'w')
+
+    splitter = SentenceSplitter(language=args.lang)
+
+    prefix_dirs = []
+    for _, si, _ in os.walk(args.mono_shard_dir):
+        for s in si:
+            prefix_dirs.append(os.path.join(args.mono_shard_dir, s))
+        break
+        
+
+    hasher = HashXX32(seed=14, max_hash_value=math.pow(10, args.prefix_length))
+
+    doc_gen = get_next_doc(args, istream)
+    doc_id, document = next(doc_gen)
+    count = 0
+    while document is not None:
+        original, base_doc = find_monolingual_document(doc_id, prefix_dirs, hasher, args.prefix_length)
+        if original is None:
+            metadata = []
+            for d in document:
+                metadata.append({
+                    "text": None,
+                    "paragraph_id": None,
+                    "sentence_id": None,
+                    "start_token": None,
+                    "end_token": None
+                })
+            doc_hash = None
+        else:
+            metadata = align_document(document, original)
+            doc_hash = hashlib.md5(base_doc.encode('utf-8')).hexdigest()
+            doc_out.write(bytes(f"{doc_hash}\t{doc_id}\t{base_doc}", "utf-8"))
+        for m, d in zip(metadata, document):
+            count += 1
+            outline = [_.strip() for _ in d["line"].split(args.delimiter)]
+            outline.append(m["paragraph_id"])
+            outline.append(m["sentence_id"])
+            outline.append(m["start_token"])
+            outline.append(m["end_token"])
+            outline.append(doc_hash)
+
+            outline = [str(o) for o in outline]
+            print(args.delimiter.join(outline).strip())
+                
+        doc_id, document = next(doc_gen)
+
+    doc_out.close()

@@ -1,0 +1,61 @@
+#!/usr/bin/env python
+
+import argparse
+import sys
+import gzip
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input', type=str, default=None)
+    parser.add_argument('--docfield', type=str, default='0')
+    parser.add_argument('--delimiter', type=str, default='\t')
+    parser.add_argument('--prefix', type=str, default="x")
+    parser.add_argument('--chunk_size', type=int, default=1000000)
+    parser.add_argument('--doc_based', default=False, action='store_true')
+
+    args = parser.parse_args()
+
+    if args.input is None:
+        istream = sys.stdin
+    else:
+        istream = open(args.input)
+
+    if ',' in args.docfield:
+        docfield = [int(d) for d in args.docfield.split(',')]
+    else:
+        docfield = [int(args.docfield)]
+
+    num_chunks = 0
+    ostream = gzip.open(f'{args.prefix}{num_chunks:06}.gz', 'w')
+    ostream_length = 0
+    doc_id = ""
+    doc = []
+    for i, line in enumerate(istream):
+        if i % 1000000 == 0:
+            print(i)
+        fields = line.split(args.delimiter)
+        did = "\t".join([fields[d] for d in docfield])
+        if did != doc_id and len(doc) > 0:
+            if args.doc_based:
+                if ostream_length + 1 > args.chunk_size:
+                    num_chunks += 1
+                    ostream.close()
+                    ostream = gzip.open(f'{args.prefix}{num_chunks:06}.gz', 'w')
+                    ostream_length = 0
+                ostream_length += 1
+            else:
+                if ostream_length + len(doc) > args.chunk_size:
+                    num_chunks += 1
+                    ostream.close()
+                    ostream = gzip.open(f'{args.prefix}{num_chunks:06}.gz', 'w')
+                    ostream_length = 0
+                ostream_length += len(doc)
+            for d in doc:
+                ostream.write(bytes(d, 'utf-8'))
+            doc = []
+        doc.append(line)
+        doc_id = did
+    for d in doc:
+        ostream.write(bytes(d, 'utf-8'))
+    ostream.close()
