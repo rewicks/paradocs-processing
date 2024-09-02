@@ -33,7 +33,7 @@ if __name__ == "__main__":
     doc = []
     for i, line in enumerate(istream):
         if i % 1000000 == 0:
-            print(i)
+            print(f"Processed {i} lines...", file=sys.stderr)
         fields = line.split(args.delimiter)
         did = "\t".join([fields[d] for d in docfield])
         if did != doc_id and len(doc) > 0:

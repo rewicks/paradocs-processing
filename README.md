@@ -149,11 +149,16 @@ I would also recommend that `marta.en-nl.nl.paragraph_id.gz` has the same line c
 
 I have a wrapper script around NLLB's fasttext model that will output the probability for a given language, but very straightforward:
 
+You'll need to download the fasttext LID model
 ```
-zcat docs/marta/000000.gz | cut -f3 | scripts/nllb_spec "__label__eng_Latn" | gzip --best > aligned/marta/eng/000000.langs.gz
+wget -o "scripts/lid.model" https://dl.fbaipublicfiles.com/nllb/lid/lid218e.bin
+```
+
+```
+zcat docs/marta/000000.gz | cut -f3 | scripts/nllb_spec "__label__eng_Latn" scripts/lid.model | gzip --best > aligned/marta/eng/000000.langs.gz
 
 # Column 4 for the target text
-zcat docs/marta/000000.gz | cut -f4 | scripts/nllb_spec "__label__nld_Latn" | gzip --best > aligned/marta/nld/000000.langs.gz
+zcat docs/marta/000000.gz | cut -f4 | scripts/nllb_spec "__label__nld_Latn" scripts/lid.model | gzip --best > aligned/marta/nld/000000.langs.gz
 ```
 
 ## Frequency Counts

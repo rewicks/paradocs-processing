@@ -218,7 +218,10 @@ if __name__ == "__main__":
 
     doc_out = gzip.open(args.doc_out, 'w')
 
-    splitter = SentenceSplitter(language=args.lang)
+    try:
+        splitter = SentenceSplitter(language=args.lang)
+    except:
+        splitter = SentenceSplitter(language='en')
 
     prefix_dirs = []
     for _, si, _ in os.walk(args.mono_shard_dir):

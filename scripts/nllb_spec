@@ -6,8 +6,9 @@ import json
 
 complete = False
 lang = sys.argv[1]
+MODEL_PATH = sys.argv[2]
 
-MODEL_PATH="/home/hltcoe/rwicks/bin/nllb.lid.model"
+#MODEL_PATH="lid.model"
 model = fasttext.load_model(MODEL_PATH)
 
 for line in sys.stdin:

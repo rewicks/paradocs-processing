@@ -49,8 +49,8 @@ def main(args):
     for line in sys.stdin:
         url, text = line.split("\t")
         count += 1
-        if count % 100000 == 0:
-            print(f"{count} \ 50000000 : {time.time()-start}")
+        if count % 1000000 == 0:
+            print(f"{count} lines processed in {time.time()-start} seconds", file=sys.stderr)
             start = time.time()
 
 
@@ -59,7 +59,7 @@ def main(args):
 
         normalized = normalize_url(url)
         prefix = hasher.hash(normalized).zfill(args.prefix_length)
-        file_path = os.path.join(args.outdir, f"{prefix[0]}{prefix[1]}/{prefix[2]}{prefix[3]}")
+        file_path = os.path.join(args.outdir, args.postfix, f"{prefix[0]}{prefix[1]}/{prefix[2]}{prefix[3]}")
 
         os.makedirs(file_path, exist_ok=True)
 
